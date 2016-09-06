@@ -30,7 +30,10 @@ import com.sun.tools.attach.*;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.BindException;
+import java.net.InetSocketAddress;
 import java.util.List;
+import java.util.Random;
 import java.util.jar.JarFile;
 
 /**
@@ -39,6 +42,11 @@ import java.util.jar.JarFile;
  */
 public class Install
 {
+    private static final int PORT_FINDER_TRIES = 16;
+
+    // linux ports < 1024 reserved for root, and can't use 0, so offset by additional 1.
+    private static final int PORT_FINDER_MAX_PORT = 65535 - 1024 - 1;
+
     /**
      * main routine for use from command line
      *
@@ -54,9 +62,16 @@ public class Install
         Install attachTest = new Install();
         attachTest.parseArgs(args);
         try {
-                attachTest.locateAgent();
-                attachTest.attach();
-                attachTest.injectAgent();
+            boolean report = attachTest.port == -1;
+
+            attachTest.locateAgent();
+            attachTest.attach();
+            attachTest.injectAgent();
+
+            if ( report )
+            {
+                System.out.printf( "Byteman listening on: %s:%d", attachTest.host, attachTest.port);
+            }
         } catch (Exception e) {
             System.out.println(e);
             System.exit(1);
@@ -71,6 +86,8 @@ public class Install
     * @param port the port to be used by the agent listener or 0 for the default port
     * @param properties an array of System properties to be installed by the agent with optional values e.g.
     * values such as "org.jboss.byteman.verbose" or "org.jboss.byteman.dump.generated.classes.directory=./dump"
+    * @return InetSocketAddress corresponding to the host and port actually used for the agent (useful in case the port
+    * is randomly selected)
     * @throws IllegalArgumentException if any of the arguments  is invalid
     * @throws FileNotFoundException if the agent jar cannot be found using the environment variable BYTEMAN_HOME
     * or the System property org.jboss.byteman.home and cannot be located in the current classpath
@@ -80,12 +97,12 @@ public class Install
     * @throws AgentInitializationException if the agent fails to initialize after loading. this almost always
     * indicates that the agent is already loaded into the JVM
      */
-    public static void install(String pid, boolean addToBoot, String host, int  port, String[] properties)
+    public static InetSocketAddress install( String pid, boolean addToBoot, String host, int  port, String[] properties)
             throws IllegalArgumentException, FileNotFoundException,
             IOException, AttachNotSupportedException,
             AgentLoadException, AgentInitializationException
     {
-         install(pid, addToBoot, false, host, port, properties);
+         return install(pid, addToBoot, false, host, port, properties);
     }
 
    /**
@@ -96,6 +113,8 @@ public class Install
     * @param port the port to be used by the agent listener or 0 for the default port
     * @param properties an array of System properties to be installed by the agent with optional values e.g.
     * values such as "org.jboss.byteman.verbose" or "org.jboss.byteman.dump.generated.classes.directory=./dump"
+    * @return InetSocketAddress corresponding to the host and port actually used for the agent (useful in case the port
+    * is randomly selected)
     * @throws IllegalArgumentException if any of the arguments  is invalid
     * @throws FileNotFoundException if the agent jar cannot be found using the environment variable BYTEMAN_HOME
     * or the System property org.jboss.byteman.home and cannot be located in the current classpath
@@ -105,12 +124,12 @@ public class Install
     * @throws AgentInitializationException if the agent fails to initialize after loading. this almost always
     * indicates that the agent is already loaded into the JVM
     */
-   public static void install(String pid, boolean addToBoot, boolean setPolicy, String host, int  port, String[] properties)
+   public static InetSocketAddress install( String pid, boolean addToBoot, boolean setPolicy, String host, int  port, String[] properties)
            throws IllegalArgumentException, FileNotFoundException,
             IOException, AttachNotSupportedException,
             AgentLoadException, AgentInitializationException
     {
-        if (port < 0) {
+        if (port < -1) {
             throw new IllegalArgumentException("Install : port cannot be negative");
         }
         
@@ -128,6 +147,8 @@ public class Install
         install.locateAgent();
         install.attach();
         install.injectAgent();
+
+        return InetSocketAddress.createUnresolved( install.host, install.port );
     }
 
     public static VMInfo[] availableVMs()
@@ -406,7 +427,7 @@ public class Install
             if (pid <= 0) {
                 throw new IllegalArgumentException("Install : invalid pid " +id);
             }
-            vm = VirtualMachine.attach(Integer.toString(pid));
+            vm = VirtualMachine.attach(Integer.toString(pid)); // [jdcasey] why not use the original 'id' value instead of converting back?
         } else {
             // try to search for this VM with an exact match
             List<VirtualMachineDescriptor> vmds = VirtualMachine.list();
@@ -453,9 +474,45 @@ public class Install
 
     /**
      * get the attached process to upload and install the agent jar using whatever agent options were
-     * configured on the command line
+     * configured on the command line. If port == -1, try to randomly assign one.
      */
     private void injectAgent() throws AgentLoadException, AgentInitializationException, IOException
+    {
+        // Special case; don't use default value, use port-finder logic to find a random one.
+        // Useful for testing in parallel VMs.
+        if ( port == -1 )
+        {
+            Random random = new Random();
+            for ( int i = 0; i < PORT_FINDER_TRIES; i++ )
+            {
+                int p = random.nextInt( PORT_FINDER_MAX_PORT ) + 1025;
+                try
+                {
+                    attemptAgentInjection( p );
+                    port = p;
+                    break;
+                }
+                catch ( BindException e )
+                {
+                    if ( i + 1 >= PORT_FINDER_TRIES )
+                    {
+                        throw e;
+                    }
+                }
+            }
+        }
+        // This is the normal use case.
+        else
+        {
+            attemptAgentInjection( port );
+        }
+    }
+
+    /**
+     * get the attached process to upload and install the agent jar using whatever agent options were
+     * configured on the command line, along with the provided port.
+     */
+    private void attemptAgentInjection( int port ) throws AgentLoadException, AgentInitializationException, IOException
     {
         try {
             // we need at the very least to enable the listener so that scripts can be uploaded

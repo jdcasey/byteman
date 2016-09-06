@@ -34,6 +34,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
 import java.util.LinkedList;
 import java.util.Properties;
 
@@ -513,7 +514,14 @@ public class BMUnitConfigState
             for (String key : properties.stringPropertyNames()) {
                 proparray[i++] = key + "=" + properties.getProperty(key);
             }
-            Install.install(id, true, isPolicy(), getHost(), getPort(), proparray);
+
+            // If port == -1, Install will attempt to randomly generate one.
+            // If that happens, we need to record the result here.
+            // For consistency, we can record the resulting hostname as well, to make room for automatically
+            // determining that too in the future (eg. selecting from a number of interfaces).
+            InetSocketAddress installResult = Install.install( id, true, isPolicy(), getHost(), getPort(), proparray );
+            agentHost = installResult.getHostName();
+            agentPort = installResult.getPort();
         } catch (AgentInitializationException e) {
             // this probably indicates that the agent is already installed
         }
