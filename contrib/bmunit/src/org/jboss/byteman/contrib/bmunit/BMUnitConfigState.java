@@ -92,8 +92,8 @@ public class BMUnitConfigState
         String agentPortString = config.agentPort();
         if (previous == null && (agentPortString == null || agentPortString.length() == 0)) {
                 agentPort = initPort();
-                if (agentPort < 0) {
-                    agentPort = 0;
+                if (agentPort < -1) {
+                    agentPort = -1;
                 }
         } else {
             try {
@@ -101,8 +101,8 @@ public class BMUnitConfigState
             } catch (NumberFormatException e) {
                 agentPort = 0;
             }
-            if (agentPort < 0) {
-                agentPort = 0;
+            if (agentPort < -1) {
+                agentPort = -1;
             }
         }
         // the load dir and resource load dir can be reset but if they are
@@ -522,6 +522,7 @@ public class BMUnitConfigState
             InetSocketAddress installResult = Install.install( id, true, isPolicy(), getHost(), getPort(), proparray );
             agentHost = installResult.getHostName();
             agentPort = installResult.getPort();
+            System.out.printf( "BMUnit : using agent host: %s and port: %s\n", agentHost, agentPort );
         } catch (AgentInitializationException e) {
             // this probably indicates that the agent is already installed
         }
